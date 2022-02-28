@@ -1,0 +1,133 @@
+---
+title: "NYPD Shootings"
+author: "Alexa Shreeve"
+date: "2/20/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Reading in the Data and R Libraries
+First, we will load in the necessary packages.
+```{r lib_pull}
+library(tidyverse)
+library(lubridate)
+```
+
+### About the Data
+
+The data was obtained from <https://catalog.data.gov/>. It is a list of every shooting incident from 2006 to 2020. Each observation represents an individual shooting incident and contains information on the victim, the perpetrator, and the location where it occurred. In the data set description, it explains that the data is "manually extracted every quarter and reviewed by the Office of Management Analysis and Planning before being posted on the NYPD website".
+
+Now, we will read in the data on NYPD shootings (historic). We do this by copying the link address, storing that as a variable, and calling the `read_csv()` function.
+``` {r data_pull}
+data_url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+nypd_shootings <- read_csv(data_url)
+```
+
+## Cleaning the Data
+
+Now that we have our data, we must clean it in order to perform any analysis. To start, I explored the data set to make sense of the different observations and variables. The set initially has 19 columns. Some of these won't be necessary for my future analysis. For example, "Latitude","Longitude", and "Lon_Lat" all contain information on the specific location of an incident, which I will not need as I'd like to focus on the victims' demographics and timing of a given incident. So, I will begin by removing columns I will not use. 
+
+```{r col_removal}
+nypd_shootings <- nypd_shootings %>%
+  select(-c(Latitude, Longitude, Lon_Lat, X_COORD_CD, Y_COORD_CD))
+```
+
+Now, we will begin with a general overview of the data.
+```{r data_sum}
+summary(nypd_shootings)
+```
+
+Immediately, I see that I need to clean up the dates for "Occur_Date". I converted to a date object, then created new variables based on day of the month, month, year, and day of the week. 
+```{r clean_date}
+# Convert date string to date object
+nypd_shootings$DATE <- as.Date(nypd_shootings$OCCUR_DATE, format = "%m/%d/%Y")
+# Add new fields
+nypd_shootings$MONTH <- month(nypd_shootings$DATE)
+nypd_shootings$DAY <- day(nypd_shootings$DATE)
+nypd_shootings$YEAR <- year(nypd_shootings$DATE)
+nypd_shootings$WEEKDAY <- weekdays(nypd_shootings$DATE)
+summary(nypd_shootings)
+```
+
+Now, we can confirm that the data we are working with is between January 1st, 2006 and December 31st, 2020. In the event that there is missing data, then I plan to exclude it from my analysis and creation of visualizations.
+
+## Visualizations and Analysis
+
+### Time of shootings
+I want to first explore the timing of shootings throughout the years
+```{r timing}
+incidents_year <- nypd_shootings %>% group_by(YEAR) %>% count(YEAR)
+ggplot(data = incidents_year, mapping = aes(x = YEAR, y = n)) + geom_line() + labs(x = "Year", y = "Number of Incidents", title = "Shooting Incidents in NYC by Year")
+```
+
+Looking at this graph, I'm curious about what would have caused the downward trend in the number of shooting incidents. Were there any policy changes in gun distribution? Were new laws put in place? I also would explore the sudden spike in incidents between 2019 and 2020. What would cause a dramatic increase while there was a general downward trend occurring?
+
+### Looking at the demographics of victims
+
+Next, I wanted to explore the demographics of the victims of shooting incidents in NYC. I first selected the information I wanted to include and then graphed comparisons based on the different groups. 
+
+```{r victim_demographics}
+incidents_vic_race <- nypd_shootings %>% select(YEAR, BORO, VIC_RACE, STATISTICAL_MURDER_FLAG) %>% group_by(YEAR, BORO, VIC_RACE, STATISTICAL_MURDER_FLAG) %>% count(YEAR, BORO, VIC_RACE, STATISTICAL_MURDER_FLAG)
+
+incidents_vic_age <- nypd_shootings %>% select(YEAR, BORO, VIC_AGE_GROUP, STATISTICAL_MURDER_FLAG) %>% group_by(YEAR, BORO, VIC_AGE_GROUP, STATISTICAL_MURDER_FLAG) %>% count(YEAR, BORO, VIC_AGE_GROUP, STATISTICAL_MURDER_FLAG)
+
+incidents_vic_sex <- nypd_shootings %>% select(YEAR, BORO, VIC_SEX, STATISTICAL_MURDER_FLAG) %>% group_by(YEAR, BORO, VIC_SEX, STATISTICAL_MURDER_FLAG) %>% count(YEAR, BORO, VIC_SEX, STATISTICAL_MURDER_FLAG)
+```
+
+This gives us the following plots. First, I created a bar chart based on the victim's race. I also used color to visualize the differences in incidents with the statistical murder flag and those without it. 
+``` {r vic_race_plot}
+ggplot(data = incidents_vic_race, mapping = aes(x = VIC_RACE, fill=STATISTICAL_MURDER_FLAG, y=n)) +
+geom_bar(position = position_stack(reverse = TRUE), stat="identity") +
+labs(x = "Victim Race", y="Shooting Incidents", title="Shootings by Victim Race in NYC") +
+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+scale_x_discrete(labels = function(x) str_wrap(x, width = 10))
+```
+
+In this plot, we see that the majority of victims of shooting incidents are black, followed by white Hispanic and black Hispanic. Additionally, it seems that black victims have a higher percentage of containing the statistical murder flag. In the future, I think exploring this would be useful. 
+
+The next plot I created was based on the victims' age groups. 
+
+```{r vic_age_plot}
+ggplot(data = incidents_vic_age, mapping = aes(x = VIC_AGE_GROUP, fill=STATISTICAL_MURDER_FLAG, y=n)) +
+geom_bar(position = position_stack(reverse = TRUE), stat="identity") +
+labs(x = "Victim Age Group", y="Shooting Incidents", title="Shootings by Victim Age Group in NYC") +
+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+scale_x_discrete(labels = function(x) str_wrap(x, width = 10))
+```
+
+From this plot, we see that victims are mostly between the ages of 25-44, followed closely by ages 18-24. 
+
+Lastly, I looked at the victim's sex. 
+
+```{r vic_sex_plot}
+ggplot(data = incidents_vic_sex, mapping = aes(x = VIC_SEX, fill = STATISTICAL_MURDER_FLAG, y = n)) +
+geom_bar(position = position_stack(reverse = TRUE), stat = "identity") +
+labs(x = "Victim Sex", y = "Number of Incidents", title = "Shootings by Victim Sex in NYC")
+```
+
+With this, we see a significant difference between victim's sex. There are significantly more male victims than female victims. 
+
+## Conclusions
+
+### Additional questions
+- What caused the spike in shooting incidents between 2019 and 2020? There was a general decrease in the total number of incidents until then. What external factors could have led to this? COVID-19? Political environmental changes?
+
+- How does the victim demographics compare to that of the perpetrators? Would we see that they match or differ? Are there any trends within that?
+
+- How was this data collected? 
+
+- What could we do with exploring the statistical murder flag more? Specifically, what is the definition of the statistical murder flag field, and who/what dictates whether an incident is true/false? Why are there significantly less incidents with the flag? 
+
+
+### Bias recognition
+Possible sources of bias may be in the collection of the data. Firstly, the data is manually recorded and reviewed, which allows for human error.Additionally, when we focus on the demographics of both victim and perpetrator - specifically race and sex - there becomes room for bias. In my own exploration of the data for visualization/analysis, I focused on the victims' demographics rather than those of the perpetrators. This could reveal my own bias, and I would consider approaching future analysis by reviewing all identities of those involved in a given incident. 
+
+## Session Info
+```{r session_info}
+sessionInfo()
+```
