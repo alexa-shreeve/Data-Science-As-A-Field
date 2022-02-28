@@ -1,0 +1,287 @@
+---
+title: "COVID-19"
+author: "Alexa Shreeve"
+date: "2/27/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Project Summary
+In this project, I explore the data provided by the Center for Systems Science and Engineering (CSSE) at Johns Hopkins University. Specifically, I examine COVID-19 cases and deaths by state and determine some states that have done better than expected and states that have done worse than expected. I also explore the changes in cases and deaths over time for Colorado and Utah. 
+
+## About the Data
+The data was available through GitHub at <https://github.com/CSSEGISandData/COVID-19>. In this project, I focus primarily on US COVID-19 data. The data available in this  folder contains daily time series summary tables, including confirmed, deaths and recovered. All data is read in from the daily case report. The time series tables are subject to be updated if inaccuracies are identified in our historical data.
+
+In the event that there is missing data, I will exclude it from visualizations and analysis. 
+
+
+## Importing Libraries and Data
+First, we pull in the necessary libraries to perform our analysis on the data. 
+```{r lib_import}
+library(tidyverse)
+library(lubridate)
+```
+
+Next, I pull in the global cases in death as well as the US cases and death. I followed the lecture in importing the data by creating vectors and using string concatenation. 
+
+```{r data_import}
+url_in <-"https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names <- c("time_series_covid19_confirmed_US.csv",
+                "time_series_covid19_confirmed_global.csv",
+                "time_series_covid19_deaths_US.csv",
+                "time_series_covid19_deaths_global.csv")
+urls <- str_c(url_in,file_names)
+global_cases <- read_csv(urls[2])
+global_deaths <- read_csv(urls[4])
+US_cases <- read_csv(urls[1])
+US_deaths <- read_csv(urls[3])
+uid <- read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv")
+```
+
+## Cleaning the Data
+After importing the data, I now need to tidy it. Specifically, I pivoted data so that each variable had its own column: date, cases, and death. I don't plan on using Lat and Long for my future analysis, so I also remove them from my data. I followed Dr. Wall through this portion of the data tidying. 
+```{r pivot_data}
+global_cases <- global_cases %>%
+  pivot_longer(cols=-c('Province/State','Country/Region',Lat,Long), names_to="date", values_to="cases") %>% 
+  select(-c(Lat, Long))
+
+global_deaths <- global_deaths %>%
+  pivot_longer(cols=-c('Province/State','Country/Region',Lat,Long), names_to="date", values_to="deaths") %>% 
+  select(-c(Lat, Long))
+
+US_cases <- US_cases %>% 
+  pivot_longer(cols = -(UID:Combined_Key), names_to="date", values_to="cases") %>%
+  select(Admin2:cases) %>% 
+  mutate(date = mdy(date)) %>% 
+  select(-c(Lat, Long_))
+
+US_deaths <- US_deaths %>% 
+  pivot_longer(cols = -(UID:Population), names_to="date", values_to="deaths") %>% 
+  select(Admin2:deaths) %>% 
+  mutate(date = mdy(date)) %>% 
+  select(-c(Lat, Long_))
+```
+
+Next, I want to combine global cases with global deaths and US cases with US deaths. This will allow all information on COVID cases/deaths to be contained within singular data sets rather than separated. 
+```{r clean_data_2}
+global <- global_cases %>% 
+  full_join(global_deaths) %>% 
+  rename(Country_Region = `Country/Region`, Province_State = `Province/State`) %>% 
+  mutate(date = mdy(date))
+
+global <- global %>%
+  unite("Combined_Key",
+        c(Province_State, Country_Region),
+          sep = ", ",
+          na.rm = TRUE,
+          remove = FALSE)
+
+US <- US_cases %>%
+  full_join(US_deaths)
+```
+
+## Visualization and Analysis
+I chose to focus specifically on US cases and deaths. For this, I grouped cases/deaths by the states in which they occurred and calculated the number deaths per million. Then, I calculated the totals by state.
+```{r vis_1}
+US_by_state <- US %>%
+  group_by(Province_State, Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+  select(Province_State, Country_Region, date, cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+
+US_totals <- US_by_state %>%
+  group_by(Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+  select(Country_Region, date, cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+```
+
+This creates the following plot.
+```{r us_totals}
+US_totals %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x = date, y = cases)) +
+  geom_line(aes(color = "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color = "deaths")) +
+  geom_point(aes(y = deaths, color = "deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = "COVID19 in US", y = NULL)
+```
+
+In this plot, we see a drastic increase in both cases and deaths towards the beginning of the pandemic. However, the increase begins to stabilize for both as time continues. Additionally, we see that cases and deaths seem to follow a similar shape, however there are more cases than there are deaths. 
+
+```{r ts}
+US_ts <- US %>%
+  select(date, cases, deaths) %>%
+  group_by(date) %>%
+  summarize(across(everything(), sum))
+## make daily counts from the cumulative count
+us_ts <- US_ts %>%
+  arrange(date) %>%
+  mutate(new_cases = c(cases[1],diff(cases))) %>%
+  mutate(new_deaths = c(deaths[1],diff(deaths)))
+```
+
+I also created the following plots showing the daily confirmed cases and deaths as well as the cumulative confirmed cases and deaths in the US. 
+```{r vis_2}
+ggplot() +
+  geom_line(data=us_ts, aes(x=date, y=cases), color="blue", lwd=1.2) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = "date", y="cases", title="Covid-19 cumulative confirmed cases in the United States")
+ggplot() +
+  geom_line(data=us_ts, aes(x=date, y=deaths), color="red", lwd=1.2) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = "date", y="deaths", title="Covid-19 cumulative deaths in the United States")
+ggplot() +
+  geom_line(data=us_ts, aes(x=date, y=new_cases), color="blue", lwd=1.2) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = "date", y="cases", title="Covid-19 daily confirmed cases in the United States")
+ggplot() +
+  geom_line(data=us_ts, aes(x=date, y=new_deaths), color="red", lwd=1.2) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = "date", y="deaths", title="Covid-19 daily deaths in the United States")
+```
+
+In these plots, we see that there was a sudden spike in the daily confirmed cases around the start of 2022. The spike is also seen towards the end of the cumulative confirmed cases plot. While the cumulative number of deaths has a steady increase over time, there is a lot more variation within the daily number of deaths. The number changes a lot more randomly and there is no pattern in deaths over time when looking at it on a daily scale. 
+
+After looking at the US total cases and deaths, I studied Colorado's total cases and deaths over time. 
+```{r col_vis}
+state <- "Colorado"
+US_by_state %>%
+  filter(Province_State == state) %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x = date, y = cases)) +
+  geom_line(aes(color = "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color = "deaths")) +
+  geom_point(aes(y = deaths, color = "deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = str_c("COVID19 in ", state), y = NULL)
+```
+
+In this plot, we see that Colorado follows a trend very similar to that of the US with regards to the trend in numbers of cases and deaths over time. It is important to note, however, that these numbers are on a different magnitude compared to the entire US. 
+
+After studying Colorado's specific case and death totals, I wanted to compare it to a neighboring state. I was curious to see if Utah - a notably more conservative state- would have similar trends to those of Colorado. Thus, I created a matching plot using the data on Utah's total number of cases and deaths over time.
+```{r ut_vis}
+state <- "Utah"
+US_by_state %>%
+  filter(Province_State == state) %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x = date, y = cases)) +
+  geom_line(aes(color = "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color = "deaths")) +
+  geom_point(aes(y = deaths, color = "deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = str_c("COVID19 in ", state), y = NULL)
+```
+
+When comparing the plots for Utah and Colorado, I am surprised that the two plots had similar trends. Although Utah has less total cases and deaths, the two states both had a steep increase at the beginning of the pandemic that eventually began to level off.
+
+The last thing I did within this project is create a plot showing how states within the US did compared to their expectations. 
+```{r ts_create}
+US_state_ts <- US %>%
+  select(date, Province_State, Population, cases, deaths) %>%
+  group_by(Province_State, date) %>%
+  summarize(across(everything(), sum)) %>%
+  arrange(Province_State, date) %>%
+  mutate(new_cases = c(cases[1],diff(cases))) %>%
+  mutate(new_deaths = c(deaths[1],diff(deaths))) %>%
+  mutate(cases_per_C = cases*100000/Population,
+         deaths_per_C = deaths*100000/Population,
+         new_cases_per_C = new_cases*100000/Population,
+         new_deaths_per_C = new_deaths*100000/Population)
+
+us_states_latest <- filter(US_state_ts, date=='2022-02-27')
+```
+
+```{r us_scat}
+us_scat <- ggplot(us_states_latest, aes(x=Population, y=deaths)) +
+  geom_point(size=2) +
+  geom_point(data=us_states_latest %>% 
+               filter(Province_State=="California"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="California"), label="CA", hjust=0, vjust=0) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="Texas"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Texas"), label="TX", hjust=0, vjust=0) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="Florida"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Florida"), label="FL", hjust=0, vjust=0) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="New York"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="New York"), label="NY", hjust=0, vjust=0) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="New Jersey"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="New Jersey"), label="NJ", hjust=0, vjust=0) +
+  geom_text(data=subset(us_states_latest, Province_State =="North Carolina"), label="NC", hjust=0, vjust=0) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="North Carolina"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Pennsylvania"), label="PA", hjust=0, vjust=0) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="Pennsylvania"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Georgia"), label="GA", hjust=0, vjust=0) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="Georgia"), color="Red") +
+  geom_point(data=us_states_latest %>% filter(Province_State=="Virginia"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Virginia"), label="VA", hjust=0, vjust=0) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="Washington"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Washington"), label="WA", hjust=0, vjust=0) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="Arizona"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Arizona"), label="AZ", hjust=0, vjust=0) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="Massachusetts"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Massachusetts"), label="MA", hjust=0, vjust=0) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="Wisconsin"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Wisconsin"), label="WI", hjust=1, vjust=0) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="Colorado"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Colorado"), label="CO", hjust=0, vjust=1) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="Minnesota"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Minnesota"), label="MN", hjust=1, vjust=1) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="Alabama"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Alabama"), label="AL", hjust=0, vjust=0) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="Louisiana"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Louisiana"), label="LA", hjust=1, vjust=0) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="Oregon"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Oregon"), label="OR", hjust=0, vjust=0) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="Puerto Rico"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Puerto Rico"), label="PR", hjust=0, vjust=1) +  
+  geom_point(data=us_states_latest %>% filter(Province_State=="Utah"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Utah"), label="UT", hjust=0, vjust=0) +
+  geom_point(data=us_states_latest %>% filter(Province_State=="Mississippi"), color="Red") +
+  geom_text(data=subset(us_states_latest, Province_State =="Mississippi"), label="MS", hjust=0, vjust=0) +
+  stat_smooth(method="lm",
+              formula = y~x) +
+  annotate(geom="text", x=12000000, y=65000, label="Covid-19 deaths higher than expected",
+              color="Steel Blue") +
+  annotate(geom="text", x=25000000, y=25000, label="Covid-19 deaths lower than expected",
+              color="Steel Blue") +
+  annotate(geom="text", x=37500000, y=-5000, size=3, label="Data as of Nov 17, 2021") +
+  scale_x_continuous(labels = scales::comma) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title="Deaths vs Population by State")
+
+us_scat
+```
+
+Looking at this, we see states that had more COVID-19 related deaths as well as states that has less COVID-19 related deaths. Some states that had more than expected include New York, Florida, and Texas. On the other side, some states that had less deaths than expected are California, North Carolina, and Virginia.
+
+## Conclusion
+From our studies of the COVID-19 cases and deaths in the US, we see that although the total number of COVID-19 cases and COVID related deaths are increasing, the change in numbers is beginning to decrease and we are seeing less new cases and deaths per day. We saw this when looking at the US as a country as well as examining specific states. When we compared expected number of deaths to the actual data, we found states that had more deaths than expected as well as states with less deaths than expected. After conducting my analysis I am left with the following addditional questions about future analysis and potential bias in the current result generation. 
+
+### Additional Questions
+- How would our model look on the global scale? What countries would have higher deaths than expected? What countries would have lower deaths than expected?
+
+- How has state-wise policy changes affected the change in COVID-19 cases and deaths? Could we include that in our comparison?
+
+- How were these numbers affected by the introduction of the vaccine? 
+
+### Acknowledgement of Bias
+When collecting data on disease, I expect there to be some missing bias as testing availability can vary drastically between different areas, states, and countries. Additionally, the definition of COVID-19 related deaths can vary between hospitals and doctors. These reasons could affect the collection of the data used in this project.
+
+Some potential bias I had was expectations that more conservative states would have a higher number of cases and deaths. I believe I mitigated this expectation by examining both liberal and conservative states in this analysis. This allowed me to remain neutral while analyzing the data. Moving forward, I'd like to include more states of all political backgrounds in my analysis to ensure I don't focus specifically on one. 
+
+## Session Info
+```{r session_info}
+sessionInfo()
+```
